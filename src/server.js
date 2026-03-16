@@ -9,7 +9,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: true }));
+// CORS: use ALLOWED_ORIGINS in production (comma-separated), else allow all (e.g. local dev)
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  : null;
+app.use(cors({ origin: allowedOrigins ?? true, credentials: true }));
+
 app.use(express.json());
 app.use('/widget', express.static(path.join(__dirname, '..', 'widget')));
 
@@ -25,9 +30,14 @@ app.get('/', (req, res) => {
   res.type('html').send(demoHtml);
 });
 
-// Health check (no API key needed)
+// Health check: reports if the service and OpenAI key are ready (no key value exposed)
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'easyslice-chatbot' });
+  const hasKey = !!process.env.OPENAI_API_KEY?.trim();
+  res.json({
+    status: hasKey ? 'ok' : 'degraded',
+    service: 'easyslice-chatbot',
+    chat_ready: hasKey,
+  });
 });
 
 // Chat endpoint for customer service
@@ -51,11 +61,12 @@ app.post('/api/chat', async (req, res) => {
     const reply = await chat(messages);
     res.json({ reply });
   } catch (err) {
-    console.error('Chat error:', err);
-    const status = err.status === 401 ? 401 : err.status === 429 ? 503 : 500;
-    const isQuota = err.status === 429 || err.status === 402;
+    const statusCode = err.status ?? err.statusCode ?? 500;
+    console.error('Chat error:', statusCode, err.message || err);
+    const status = statusCode === 401 ? 401 : statusCode === 429 || statusCode === 402 ? 503 : 500;
+    const isQuota = statusCode === 429 || statusCode === 402;
     const message = isQuota
-      ? "Support chat is temporarily unavailable. Please email us at easyslice.ai/contact and we'll get back to you soon."
+      ? "Support chat is temporarily unavailable. Please try again later or email us."
       : (err.message || 'Something went wrong. Please try again.');
     res.status(status).json({
       error: 'Chat failed',

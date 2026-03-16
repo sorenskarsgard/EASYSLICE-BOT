@@ -97,11 +97,12 @@ Restart the API after changes so the new content is loaded. For zero-downtime up
 
 ## Environment variables
 
-| Variable         | Required | Description                          |
-|------------------|----------|--------------------------------------|
-| `PORT`           | No       | Server port (default `3001`)         |
-| `OPENAI_API_KEY` | Yes      | OpenAI API key for chat              |
-| `OPENAI_MODEL`   | No       | Model name (default `gpt-4o-mini`)   |
+| Variable           | Required | Description                                                                 |
+|--------------------|----------|-----------------------------------------------------------------------------|
+| `PORT`             | No       | Server port (default `3001`)                                               |
+| `OPENAI_API_KEY`   | Yes      | OpenAI API key for chat                                                    |
+| `OPENAI_MODEL`    | No       | Model name (default `gpt-4o-mini`)                                         |
+| `ALLOWED_ORIGINS`  | No       | Production: comma-separated origins that may call the API (e.g. easyslice.ai) |
 
 ## Project structure
 
@@ -122,12 +123,53 @@ easyslice-chatbot/
 └── README.md
 ```
 
-## CORS and deployment
+## Deployment & reliability (EasySlice production)
 
-The server uses `cors({ origin: true })`, so any origin can call it. For production, restrict this to your EasySlice domain(s) if you prefer, e.g.:
+### 1. Deploy the API
 
-```js
-app.use(cors({ origin: ['https://www.easyslice.ai', 'https://easyslice.ai'] }));
+- Host the app on **Railway**, **Render**, **Fly.io**, or any Node host.
+- Set environment variables on the host:
+  - `OPENAI_API_KEY` (required)
+  - `ALLOWED_ORIGINS=https://www.easyslice.ai,https://easyslice.ai` (recommended so only your site can call the API)
+  - `PORT` if the host expects a specific port (e.g. Render uses `PORT` automatically).
+
+### 2. Embed on EasySlice
+
+Add this to your site (e.g. contact or global layout), using your **deployed** API URL:
+
+```html
+<script
+  src="https://YOUR-DEPLOYED-API-URL/widget/chat-widget.js"
+  data-api-url="https://YOUR-DEPLOYED-API-URL"
+></script>
 ```
 
-Serve `widget/chat-widget.js` from your API host (e.g. `app.use(express.static('widget'))` or map `/widget/chat-widget.js` to the file) so the script tag can load it.
+### 3. Avoid connection and OpenAI issues
+
+- **CORS:** Set `ALLOWED_ORIGINS` in production so only your domains can call the API; avoids cross-origin errors and limits abuse.
+- **OpenAI retries:** The app retries the OpenAI API up to 2 times on rate limits (429) and server errors (5xx), so short blips are less likely to show as failures.
+- **User-facing errors:** If the key is missing or quota is exceeded, users see a short “temporarily unavailable” message instead of a raw error.
+- **Health check:** Call `GET /health` to verify the service is up and the key is loaded:
+  - `status: "ok"` and `chat_ready: true` → ready for chat.
+  - `status: "degraded"` and `chat_ready: false` → key missing or invalid; check env vars.
+
+### 4. Optional: monitor uptime
+
+- Use **UptimeRobot**, **Better Uptime**, or similar to hit `https://YOUR-DEPLOYED-API-URL/health` every few minutes.
+- If `status` is not `"ok"` or the request fails, you get an alert so you can fix env or billing.
+
+### 5. If chat stops working
+
+| Symptom              | Check |
+|----------------------|--------|
+| 503 / “key not configured” | `OPENAI_API_KEY` set on the host and app restarted after adding it. |
+| 503 / “temporarily unavailable” | OpenAI quota or rate limit; check [Usage](https://platform.openai.com/usage) and billing. |
+| 401                  | API key invalid or revoked; create a new key at [API keys](https://platform.openai.com/api-keys). |
+| CORS / connection errors | `ALLOWED_ORIGINS` includes the exact origin (e.g. `https://www.easyslice.ai`). |
+| 500                  | Check host logs for the real error; often key or OpenAI API issue. |
+
+---
+
+## CORS
+
+If `ALLOWED_ORIGINS` is not set, any origin can call the API (fine for local dev). In production, set it to your EasySlice domains so only your site can use the chatbot. The widget is served from your API host at `/widget/chat-widget.js`.

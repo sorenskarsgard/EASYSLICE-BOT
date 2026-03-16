@@ -24,6 +24,10 @@ ${KNOWLEDGE}
 - Do not make up features, pricing, or policies. Stick to what's in the knowledge base.
 - **Do not** suggest the contact page, "reach out for assistance", "we typically respond within 24 hours", or any sign-off asking them to contact support. They are already on the contact page. End your answer after the bullet points.`;
 
+const RETRY_STATUSES = new Set([429, 500, 502, 503]);
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1500;
+
 /**
  * @param {Array<{ role: 'user' | 'assistant' | 'system'; content: string }>} messages
  * @returns {Promise<string>} Assistant reply
@@ -36,16 +40,26 @@ export async function chat(messages) {
 
   const openai = getClient();
   if (!openai) throw new Error('OPENAI_API_KEY not configured');
-  const completion = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    messages: apiMessages,
-    max_tokens: 1024,
-    temperature: 0.3,
-  });
 
-  const reply = completion.choices[0]?.message?.content;
-  if (!reply) {
-    throw new Error('No reply from model');
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages: apiMessages,
+        max_tokens: 1024,
+        temperature: 0.3,
+      });
+      const reply = completion.choices[0]?.message?.content;
+      if (!reply) throw new Error('No reply from model');
+      return reply;
+    } catch (err) {
+      lastErr = err;
+      const status = err.status ?? err.statusCode;
+      const canRetry = attempt < MAX_RETRIES && status != null && RETRY_STATUSES.has(status);
+      if (!canRetry) throw err;
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
+    }
   }
-  return reply;
+  throw lastErr;
 }
